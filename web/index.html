@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Go Messaging Widget</title>
+  <title>Go Messaging App</title>
   <style>
     :root {
       --ink: #0f172a;
@@ -91,10 +91,14 @@
     li { border-bottom: 1px solid var(--border); padding: 10px 0; }
     .time { font-size: 12px; color: var(--muted); }
     .status { margin: 12px 0; font-size: 14px; color: var(--muted); }
-    .auth-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; }
+    .auth-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; align-items: start; }
     .hero {
       background: linear-gradient(135deg, rgba(14,165,233,0.12), rgba(16,185,129,0.12));
       border: 1px dashed var(--border);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding-bottom: 18px;
     }
     .tabs { margin-bottom: 12px; }
     .tab {
@@ -118,6 +122,7 @@
     }
     @media (max-width: 900px) {
       .layout { grid-template-columns: 1fr; }
+      .chat-window { height: 70vh; }
     }
     .chat-window {
       background: #fff;
@@ -128,7 +133,7 @@
       display: flex;
       flex-direction: column;
       gap: 12px;
-      height: 520px;
+      height: clamp(420px, 70vh, 580px);
     }
     .chat-stream {
       flex: 1;
@@ -164,7 +169,7 @@
       padding: 10px;
       display: grid;
       gap: 8px;
-      max-height: 360px;
+      max-height: 280px;
       overflow-y: auto;
     }
     .conversation {
@@ -269,6 +274,12 @@
       const lastSeenRef = useRef({});
       const messageInputRef = useRef(null);
       const chatStreamRef = useRef(null);
+      const convoListRef = useRef(null);
+      const lastMsgCountRef = useRef(0);
+      const lastChatRef = useRef('');
+      const convoFirstRef = useRef('');
+      const convoLengthRef = useRef(0);
+      const chatCountRef = useRef({});
 
       const scrollToBottom = () => {
         if (chatStreamRef.current) {
@@ -354,10 +365,25 @@
       }, [activeChat]);
 
       useEffect(() => {
-        if (messageInputRef.current) {
-          messageInputRef.current.focus();
+        if (!activeChat) {
+          lastMsgCountRef.current = (messages || []).length;
+          lastChatRef.current = activeChat;
+          return;
         }
-        scrollToBottom();
+        const total = (messages || []).length;
+        const activeCount = (messages || []).filter((m) => m.from === activeChat || m.to === activeChat).length;
+        const prevActive = chatCountRef.current[activeChat] || 0;
+        const chatChanged = activeChat !== lastChatRef.current;
+        const hasNewInActive = activeCount > prevActive;
+        if (chatChanged || hasNewInActive) {
+          if (messageInputRef.current) {
+            messageInputRef.current.focus();
+          }
+          scrollToBottom();
+        }
+        chatCountRef.current = { ...chatCountRef.current, [activeChat]: activeCount };
+        lastMsgCountRef.current = total;
+        lastChatRef.current = activeChat;
       }, [messages, activeChat]);
 
       const handleRegister = async (e) => {
@@ -415,21 +441,25 @@
           setField('activeChat', target);
           markSeen(target, messages);
           loadMessages();
-          loadInvitations();
         } else {
           setField('status', error);
         }
       };
 
       const acceptInvite = async (id) => {
-        const { ok, error } = await fetchJSON('/api/invitations', {
+        const { ok, error, data } = await fetchJSON('/api/invitations', {
           method: 'POST',
           body: JSON.stringify({ id }),
         });
         if (ok) {
           setField('status', 'Invitation accepted. You can now message each other.');
-          loadInvitations();
+          setField('invites', (invites || []).filter((inv) => inv.id !== id));
+          const chatUser = data?.sender;
+          if (chatUser) {
+            setField('activeChat', chatUser);
+          }
           loadMessages();
+          loadInvitations();
         } else {
           setField('status', error);
         }
@@ -472,6 +502,17 @@
         scrollToBottom();
       };
 
+      useEffect(() => {
+        const firstUser = (conversations && conversations[0] && conversations[0].user) || '';
+        const changed = firstUser && firstUser !== convoFirstRef.current;
+        const grew = (conversations || []).length > convoLengthRef.current;
+        if (convoListRef.current && (changed || grew)) {
+          convoListRef.current.scrollTop = 0;
+        }
+        convoFirstRef.current = firstUser;
+        convoLengthRef.current = (conversations || []).length;
+      }, [conversations]);
+
       const searchUsers = async (query) => {
         if (!query) {
           setField('suggestions', []);
@@ -480,7 +521,13 @@
         const res = await fetch(`/api/users?search=${encodeURIComponent(query)}`, { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
-          setField('suggestions', data);
+          const enriched = data.map((u) => {
+            let score = 0;
+            if (profile?.university && u.university && profile.university.toLowerCase() === u.university.toLowerCase()) score += 2;
+            if (profile?.location && u.location && profile.location.toLowerCase() === u.location.toLowerCase()) score += 1;
+            return { ...u, score };
+          }).sort((a, b) => b.score - a.score);
+          setField('suggestions', enriched);
         }
       };
 
@@ -590,16 +637,68 @@
                   React.createElement('span', { className: 'pill' }, profile.public ? 'Public' : 'Private'),
                 ),
                 React.createElement('div', { className: 'time' }, 'Joined ', new Date(profile.createdAt).toLocaleString()),
+                React.createElement('div', { className: 'stack' },
+                  React.createElement('label', { htmlFor: 'toggle-public', style: { margin: 0 } }, 'Visibility'),
+                  React.createElement('input', {
+                    id: 'toggle-public',
+                    type: 'checkbox',
+                    checked: profile.public,
+                    onChange: async (e) => {
+                      const next = e.target.checked;
+                      const res = await fetch('/api/profile/update', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        credentials: 'include',
+                        body: JSON.stringify({ public: next }),
+                      });
+                      if (res.ok) {
+                        setField('profile', { ...profile, public: next });
+                        setField('status', `Visibility set to ${next ? 'Public' : 'Private'}`);
+                      } else {
+                        setField('status', 'Failed to update visibility');
+                      }
+                    },
+                  }),
+                  React.createElement('span', null, profile.public ? 'Public' : 'Private'),
+                ),
               )
             ) : React.createElement('div', null, 'Not signed in.'),
             React.createElement('div', null,
-              React.createElement('div', { className: 'stack', style: { marginBottom: '8px', justifyContent: 'space-between' } },
-                React.createElement('strong', null, 'Chats'),
-                React.createElement('div', { className: 'stack' },
-                  React.createElement('button', { onClick: () => { loadMessages(); loadInvitations(); }, className: 'ghost' }, 'Refresh'),
+              React.createElement('div', { className: 'stack', style: { marginBottom: '10px', flexWrap: 'wrap' } },
+                React.createElement('input', {
+                  id: 'new-chat',
+                  value: messageForm.to,
+                  onChange: (e) => {
+                    const value = e.target.value;
+                    setField('activeChat', '');
+                    setField('messageForm', { ...messageForm, to: value });
+                    searchUsers(value);
+                  },
+                  placeholder: 'Search to chat or invite (name, uni, location)',
+                  style: { flex: 1, minWidth: '220px' },
+                }),
+              ),
+              (suggestions || []).length > 0 && React.createElement('div', { className: 'card', style: { width: '100%', marginBottom: '8px' } },
+                React.createElement('div', { className: 'stack', style: { flexWrap: 'wrap', marginBottom: '6px' } },
+                  (suggestions || []).map((u) =>
+                    React.createElement('button', {
+                      key: u.username,
+                      type: 'button',
+                      className: 'ghost',
+                      onClick: () => {
+                        setField('activeChat', u.username);
+                        setField('messageForm', { to: u.username, body: '' });
+                        setField('suggestions', []);
+                      },
+                    }, `${u.username} ${u.public ? '(public)' : '(private)'}`)
+                  )
                 )
               ),
-              React.createElement('div', { className: 'conversations' },
+              React.createElement('div', { className: 'stack', style: { marginBottom: '8px', justifyContent: 'space-between' } },
+                React.createElement('strong', null, 'Chats'),
+                React.createElement('div', null)
+              ),
+              React.createElement('div', { className: 'conversations', ref: convoListRef },
                 (conversations || []).length === 0
                   ? React.createElement('div', { className: 'time' }, 'No conversations yet.')
                   : (conversations || []).map((c) =>
@@ -619,37 +718,9 @@
                       )
                     )
               ),
-              React.createElement('div', { className: 'stack', style: { marginTop: '10px', flexWrap: 'wrap' } },
-                React.createElement('input', {
-                  id: 'new-chat',
-                  value: messageForm.to,
-                  onChange: (e) => {
-                    const value = e.target.value;
-                    setField('activeChat', '');
-                    setField('messageForm', { ...messageForm, to: value });
-                    searchUsers(value);
-                  },
-                  placeholder: 'Start a new chat (search username)',
-                  style: { flex: 1, minWidth: '200px' },
-                }),
-                (suggestions || []).length > 0 && React.createElement('div', { className: 'stack', style: { flexWrap: 'wrap' } },
-                  (suggestions || []).map((u) =>
-                    React.createElement('button', {
-                      key: u.username,
-                      type: 'button',
-                      className: 'ghost',
-                      onClick: () => {
-                        setField('activeChat', u.username);
-                        setField('messageForm', { to: u.username, body: '' });
-                        setField('suggestions', []);
-                      },
-                    }, `${u.username} ${u.public ? '(public)' : '(private)'}`)
-                  )
-                )
-              ),
               React.createElement('div', { className: 'stack', style: { marginTop: '12px', marginBottom: '8px' } },
                 React.createElement('strong', null, 'Invitations'),
-                React.createElement('button', { onClick: loadInvitations, className: 'ghost' }, 'Refresh'),
+                React.createElement('div', null),
               ),
               (invites || []).length === 0
                 ? React.createElement('div', null, 'No pending invitations.')
@@ -668,13 +739,12 @@
                   )
             ),
           ),
-            React.createElement('div', { className: 'chat-window' },
-              React.createElement('div', { className: 'stack', style: { justifyContent: 'space-between' } },
-                React.createElement('div', { className: 'stack' },
-                  React.createElement('h3', { style: { margin: 0 } }, activeChat ? `Chat with ${activeChat}` : 'Select or start a chat'),
-                ),
-                React.createElement('div', null),
+          React.createElement('div', { className: 'chat-window' },
+            React.createElement('div', { className: 'stack', style: { justifyContent: 'space-between' } },
+              React.createElement('div', { className: 'stack' },
+                React.createElement('h3', { style: { margin: 0 } }, activeChat ? `Chat with ${activeChat}` : 'Select or start a chat'),
               ),
+            ),
             React.createElement('div', { className: 'chat-stream', ref: chatStreamRef },
               (messages || []).length === 0
                 ? React.createElement('div', null, 'No messages yet.')
@@ -707,13 +777,13 @@
 
       return (
         React.createElement('div', { className: 'main' },
-          React.createElement('div', { className: 'topbar' },
-            React.createElement('h1', null, 'Go Messaging'),
-            React.createElement('div', { className: 'stack' },
-              profile && React.createElement('span', { className: 'pill' }, '@', profile.username),
-              profile && React.createElement('button', { className: 'danger', onClick: handleLogout }, 'Logout'),
+            React.createElement('div', { className: 'topbar' },
+              React.createElement('h1', null, 'Go Messaging App'),
+              React.createElement('div', { className: 'stack' },
+                profile && React.createElement('span', { className: 'pill' }, '@', profile.username),
+                profile && React.createElement('button', { className: 'danger', onClick: handleLogout }, 'Logout'),
+              ),
             ),
-          ),
           React.createElement('div', { className: 'status' }, status),
           profile ? renderDashboard() : renderAuth(),
         )

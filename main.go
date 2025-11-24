@@ -93,6 +93,7 @@ func main() {
 	mux.HandleFunc("/api/login", handleLogin)
 	mux.HandleFunc("/api/logout", handleLogout)
 	mux.Handle("/api/profile", withAuth(handleProfile))
+	mux.Handle("/api/profile/update", withAuth(handleProfileUpdate))
 	mux.Handle("/api/messages", withAuth(handleMessages))
 	mux.Handle("/api/users", withAuth(handleUsersSearch))
 	mux.Handle("/api/invitations", withAuth(handleInvitations))
@@ -306,6 +307,30 @@ func handleProfile(w http.ResponseWriter, r *http.Request, ctx authContext) {
 	}
 
 	writeJSON(w, http.StatusOK, u)
+}
+
+func handleProfileUpdate(w http.ResponseWriter, r *http.Request, ctx authContext) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var payload struct {
+		Public *bool `json:"public"`
+	}
+	if err := decodeJSON(r, &payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if payload.Public == nil {
+		http.Error(w, "no update provided", http.StatusBadRequest)
+		return
+	}
+	if _, err := db.Exec(`UPDATE users SET public=$1 WHERE username=$2`, *payload.Public, ctx.username); err != nil {
+		log.Printf("profile update error: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "visibility updated"})
 }
 
 func handleMessages(w http.ResponseWriter, r *http.Request, ctx authContext) {
@@ -611,11 +636,12 @@ func handleInvitations(w http.ResponseWriter, r *http.Request, ctx authContext) 
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var sender, status string
+		var sender, status, body string
+		var createdAt time.Time
 		err := db.QueryRow(
-			`SELECT sender, status FROM invitations WHERE id=$1 AND recipient=$2`,
+			`SELECT sender, status, body, created_at FROM invitations WHERE id=$1 AND recipient=$2`,
 			payload.ID, ctx.username,
-		).Scan(&sender, &status)
+		).Scan(&sender, &status, &body, &createdAt)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "invitation not found", http.StatusNotFound)
 			return
@@ -661,13 +687,23 @@ func handleInvitations(w http.ResponseWriter, r *http.Request, ctx authContext) 
 			return
 		}
 
+		if _, err := tx.Exec(
+			`INSERT INTO messages (sender, recipient, body, sent_at) VALUES ($1, $2, $3, $4)`,
+			sender, ctx.username, body, time.Now().UTC(),
+		); err != nil {
+			tx.Rollback()
+			log.Printf("invite message insert error: %v", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+
 		if err := tx.Commit(); err != nil {
 			log.Printf("invite tx commit error: %v", err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]string{"message": "invitation accepted"})
+		writeJSON(w, http.StatusOK, map[string]string{"message": "invitation accepted", "sender": sender})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
