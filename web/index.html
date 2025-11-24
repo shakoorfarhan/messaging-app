@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Go Messaging Widget</title>
+  <style>
+    :root {
+      --ink: #0f172a;
+      --muted: #475569;
+      --accent: #0ea5e9;
+      --accent-2: #10b981;
+      --border: #e2e8f0;
+      --bg: #f8fafc;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Helvetica Neue", Arial, sans-serif;
+      background: radial-gradient(circle at 20% 20%, #eef2ff, transparent 25%), var(--bg);
+      color: var(--ink);
+      min-height: 100vh;
+      padding: 24px;
+    }
+    h1 { margin: 0; }
+    .main { max-width: 1100px; margin: 0 auto; }
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .tagline { color: var(--muted); }
+    .grid {
+      display: grid;
+      gap: 16px;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      align-items: start;
+    }
+    .card {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.05);
+    }
+    label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+      color: var(--muted);
+    }
+    input, textarea {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 14px;
+      margin-bottom: 10px;
+      background: #f8fafc;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    button.secondary { background: var(--accent-2); }
+    button.danger { background: #ef4444; }
+    button.ghost {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--border);
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .stack { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .pill {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: #ecfeff;
+      color: #0f172a;
+      border: 1px solid var(--border);
+      font-size: 12px;
+    }
+    ul {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    li {
+      border-bottom: 1px solid var(--border);
+      padding: 10px 0;
+    }
+    .time { font-size: 12px; color: var(--muted); }
+    .status { margin: 12px 0; font-size: 14px; color: var(--muted); }
+    .auth-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; }
+    .hero {
+      background: linear-gradient(135deg, rgba(14,165,233,0.12), rgba(16,185,129,0.12));
+      border: 1px dashed var(--border);
+    }
+    .tabs { margin-bottom: 12px; }
+    .tab {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #fff;
+      cursor: pointer;
+      color: var(--muted);
+    }
+    .tab.active {
+      background: #0ea5e9;
+      color: #fff;
+      border-color: #0ea5e9;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script type="module">
+    const { useState, useEffect } = React;
+
+    const fetchJSON = async (url, options = {}) => {
+      const res = await fetch(url, {
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        ...options,
+      });
+      let message = '';
+      try {
+        const data = await res.json();
+        message = data.message || '';
+        if (!res.ok) throw new Error(message || 'request failed');
+        return { ok: true, data };
+      } catch (err) {
+        if (!message) {
+          try {
+            const text = await res.text();
+            message = text || err.message;
+          } catch {
+            message = err.message;
+          }
+        }
+        return { ok: false, error: message || 'request failed' };
+      }
+    };
+
+    function App() {
+      const [status, setStatus] = useState('Ready.');
+      const [profile, setProfile] = useState(null);
+      const [messages, setMessages] = useState([]);
+      const [authForm, setAuthForm] = useState({ username: '', password: '' });
+      const [registerForm, setRegisterForm] = useState({
+        username: '',
+        password: '',
+        location: '',
+        university: '',
+      });
+      const [messageForm, setMessageForm] = useState({ to: '', body: '' });
+      const [authMode, setAuthMode] = useState('login');
+
+      const loadProfile = async () => {
+        const res = await fetch('/api/profile', { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setProfile(data);
+        } else {
+          setProfile(null);
+        }
+      };
+
+      const loadMessages = async () => {
+        const res = await fetch('/api/messages', { credentials: 'include' });
+        if (!res.ok) {
+          setMessages([]);
+          return;
+        }
+        const data = await res.json();
+        setMessages(data);
+      };
+
+      useEffect(() => {
+        loadProfile();
+        loadMessages();
+      }, []);
+
+      const handleRegister = async (e) => {
+        e.preventDefault();
+        const { ok, error } = await fetchJSON('/api/register', {
+          method: 'POST',
+          body: JSON.stringify(registerForm),
+        });
+        setStatus(ok ? 'Registered! Now log in.' : error);
+        if (ok) setAuthMode('login');
+      };
+
+      const handleLogin = async (e) => {
+        e.preventDefault();
+        const { ok, error } = await fetchJSON('/api/login', {
+          method: 'POST',
+          body: JSON.stringify(authForm),
+        });
+        if (ok) {
+          setStatus('Logged in.');
+          setAuthForm({ username: '', password: '' });
+          await loadProfile();
+          await loadMessages();
+        } else {
+          setStatus(error);
+        }
+      };
+
+      const handleLogout = async () => {
+        const { ok, error } = await fetchJSON('/api/logout', { method: 'POST' });
+        setStatus(ok ? 'Logged out.' : error);
+        setProfile(null);
+        setMessages([]);
+      };
+
+      const handleSend = async (e) => {
+        e.preventDefault();
+        if (!messageForm.to || !messageForm.body) {
+          setStatus('Please enter recipient and message.');
+          return;
+        }
+        const { ok, error } = await fetchJSON('/api/messages', {
+          method: 'POST',
+          body: JSON.stringify(messageForm),
+        });
+        if (ok) {
+          setStatus(`Sent to ${messageForm.to}.`);
+          setMessageForm({ to: '', body: '' });
+          loadMessages();
+        } else {
+          setStatus(error);
+        }
+      };
+
+      const renderAuth = () => (
+        React.createElement('div', { className: 'auth-layout' },
+          React.createElement('div', { className: 'card hero' },
+            React.createElement('h2', null, 'Message peers securely'),
+            React.createElement('p', { className: 'tagline' }, 'Register with your location and university, then chat directly. Everything is powered by the Go API you see here.'),
+            React.createElement('div', { className: 'stack' },
+              React.createElement('span', { className: 'pill' }, 'SPA'),
+              React.createElement('span', { className: 'pill' }, 'React'),
+              React.createElement('span', { className: 'pill' }, 'Postgres-backed'),
+            ),
+          ),
+          React.createElement('div', { className: 'card' },
+            React.createElement('div', { className: 'stack tabs' },
+              ['login', 'register'].map((mode) =>
+                React.createElement('button', {
+                  key: mode,
+                  className: `tab ${authMode === mode ? 'active' : ''}`,
+                  type: 'button',
+                  onClick: () => setAuthMode(mode),
+                }, mode === 'login' ? 'Log In' : 'Register')
+              ),
+            ),
+            authMode === 'login' ? (
+              React.createElement('form', { onSubmit: handleLogin },
+                React.createElement('label', { htmlFor: 'login-username' }, 'Username'),
+                React.createElement('input', {
+                  id: 'login-username',
+                  value: authForm.username,
+                  onChange: (e) => setAuthForm({ ...authForm, username: e.target.value }),
+                  placeholder: 'piper',
+                }),
+                React.createElement('label', { htmlFor: 'login-password' }, 'Password'),
+                React.createElement('input', {
+                  id: 'login-password',
+                  type: 'password',
+                  value: authForm.password,
+                  onChange: (e) => setAuthForm({ ...authForm, password: e.target.value }),
+                  placeholder: '••••••••',
+                }),
+                React.createElement('div', { className: 'stack' },
+                  React.createElement('button', { type: 'submit' }, 'Login'),
+                ),
+              )
+            ) : (
+              React.createElement('form', { onSubmit: handleRegister },
+                React.createElement('label', { htmlFor: 'reg-username' }, 'Username'),
+                React.createElement('input', {
+                  id: 'reg-username',
+                  value: registerForm.username,
+                  onChange: (e) => setRegisterForm({ ...registerForm, username: e.target.value }),
+                  placeholder: 'piper',
+                }),
+                React.createElement('label', { htmlFor: 'reg-password' }, 'Password'),
+                React.createElement('input', {
+                  id: 'reg-password',
+                  type: 'password',
+                  value: registerForm.password,
+                  onChange: (e) => setRegisterForm({ ...registerForm, password: e.target.value }),
+                  placeholder: '••••••••',
+                }),
+                React.createElement('label', { htmlFor: 'reg-location' }, 'Location'),
+                React.createElement('input', {
+                  id: 'reg-location',
+                  value: registerForm.location,
+                  onChange: (e) => setRegisterForm({ ...registerForm, location: e.target.value }),
+                  placeholder: 'Berlin',
+                }),
+                React.createElement('label', { htmlFor: 'reg-university' }, 'University'),
+                React.createElement('input', {
+                  id: 'reg-university',
+                  value: registerForm.university,
+                  onChange: (e) => setRegisterForm({ ...registerForm, university: e.target.value }),
+                  placeholder: 'State University',
+                }),
+                React.createElement('div', { className: 'stack' },
+                  React.createElement('button', { type: 'submit', className: 'secondary' }, 'Create account'),
+                ),
+              )
+            ),
+          ),
+        )
+      );
+
+      const renderDashboard = () => (
+        React.createElement('div', { className: 'grid' },
+          React.createElement('div', { className: 'card' },
+            React.createElement('h3', null, 'Profile'),
+            profile ? (
+              React.createElement(React.Fragment, null,
+                React.createElement('div', { className: 'stack' },
+                  React.createElement('span', { className: 'pill' }, '@', profile.username),
+                  React.createElement('span', { className: 'pill' }, profile.location || 'Unknown location'),
+                  React.createElement('span', { className: 'pill' }, profile.university || 'No university'),
+                ),
+                React.createElement('div', { className: 'time' }, 'Joined ', new Date(profile.createdAt).toLocaleString()),
+              )
+            ) : React.createElement('div', null, 'Not signed in.'),
+          ),
+          React.createElement('div', { className: 'card' },
+            React.createElement('h3', null, 'Send Message'),
+            React.createElement('form', { onSubmit: handleSend },
+              React.createElement('label', { htmlFor: 'msg-to' }, 'To'),
+              React.createElement('input', {
+                id: 'msg-to',
+                value: messageForm.to,
+                onChange: (e) => setMessageForm({ ...messageForm, to: e.target.value }),
+                placeholder: 'recipient',
+              }),
+              React.createElement('label', { htmlFor: 'msg-body' }, 'Message'),
+              React.createElement('textarea', {
+                id: 'msg-body',
+                rows: 3,
+                value: messageForm.body,
+                onChange: (e) => setMessageForm({ ...messageForm, body: e.target.value }),
+                placeholder: 'Hello there',
+              }),
+              React.createElement('button', { type: 'submit' }, 'Send'),
+            ),
+          ),
+          React.createElement('div', { className: 'card', style: { gridColumn: '1 / -1' } },
+            React.createElement('div', { className: 'stack' },
+              React.createElement('h3', { style: { margin: 0 } }, 'Inbox & Outbox'),
+              React.createElement('button', { onClick: loadMessages, className: 'ghost' }, 'Refresh'),
+            ),
+            messages.length === 0
+              ? React.createElement('div', null, 'No messages yet.')
+              : React.createElement('ul', null,
+                  messages.map((m, idx) =>
+                    React.createElement('li', { key: idx },
+                      React.createElement('div', null,
+                        React.createElement('strong', null, m.from),
+                        ' → ',
+                        React.createElement('strong', null, m.to),
+                      ),
+                      React.createElement('div', null, m.body),
+                      React.createElement('div', { className: 'time' }, new Date(m.sentAt).toLocaleString()),
+                    )
+                  )
+                ),
+          ),
+        )
+      );
+
+      return (
+        React.createElement('div', { className: 'main' },
+          React.createElement('div', { className: 'topbar' },
+            React.createElement('div', null,
+              React.createElement('h1', null, 'Go Messaging'),
+              React.createElement('div', { className: 'tagline' }, profile ? 'Dashboard' : 'Welcome'),
+            ),
+            React.createElement('div', { className: 'stack' },
+              profile && React.createElement('span', { className: 'pill' }, '@', profile.username),
+              profile && React.createElement('button', { className: 'danger', onClick: handleLogout }, 'Logout'),
+            ),
+          ),
+          React.createElement('div', { className: 'status' }, status),
+          profile ? renderDashboard() : renderAuth(),
+        )
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('app'));
+    root.render(React.createElement(App));
+  </script>
+</body>
+</html>
