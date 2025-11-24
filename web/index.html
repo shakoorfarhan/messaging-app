@@ -87,15 +87,8 @@
       border: 1px solid var(--border);
       font-size: 12px;
     }
-    ul {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-    }
-    li {
-      border-bottom: 1px solid var(--border);
-      padding: 10px 0;
-    }
+    ul { list-style: none; padding: 0; margin: 0; }
+    li { border-bottom: 1px solid var(--border); padding: 10px 0; }
     .time { font-size: 12px; color: var(--muted); }
     .status { margin: 12px 0; font-size: 14px; color: var(--muted); }
     .auth-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; }
@@ -117,6 +110,87 @@
       color: #fff;
       border-color: #0ea5e9;
     }
+    .layout {
+      display: grid;
+      grid-template-columns: 320px 1fr;
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .layout { grid-template-columns: 1fr; }
+    }
+    .chat-window {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      height: 520px;
+    }
+    .chat-stream {
+      flex: 1;
+      overflow-y: auto;
+      padding-right: 4px;
+    }
+    .bubble {
+      max-width: 70%;
+      padding: 10px 12px;
+      border-radius: 12px;
+      margin-bottom: 10px;
+      border: 1px solid var(--border);
+      background: #f1f5f9;
+    }
+    .bubble.me {
+      margin-left: auto;
+      background: #dcfce7;
+      border-color: #bbf7d0;
+    }
+    .bubble .meta { font-size: 12px; color: var(--muted); margin-top: 4px; }
+    .invite-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+      box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+    }
+    .conversations {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 30px rgba(15, 23, 42, 0.05);
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      max-height: 360px;
+      overflow-y: auto;
+    }
+    .conversation {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    .conversation:hover { background: #f8fafc; border-color: var(--border); }
+    .conversation.active { background: #e0f2fe; border-color: #0ea5e9; }
+    .badge {
+      background: #ef4444;
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+    .composer {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: auto;
+    }
   </style>
 </head>
 <body>
@@ -125,7 +199,7 @@
   <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script type="module">
-    const { useState, useEffect } = React;
+    const { useEffect, useReducer, useRef } = React;
 
     const fetchJSON = async (url, options = {}) => {
       const res = await fetch(url, {
@@ -138,7 +212,7 @@
         const data = await res.json();
         message = data.message || '';
         if (!res.ok) throw new Error(message || 'request failed');
-        return { ok: true, data };
+        return { ok: true, data, message };
       } catch (err) {
         if (!message) {
           try {
@@ -152,44 +226,139 @@
       }
     };
 
+    const initialState = {
+      status: 'Ready.',
+      profile: null,
+      messages: [],
+      authForm: { username: '', password: '' },
+      registerForm: { username: '', password: '', location: '', university: '', public: true },
+      messageForm: { to: '', body: '' },
+      authMode: 'login',
+      suggestions: [],
+      invites: [],
+      conversations: [],
+      activeChat: '',
+      lastSeen: {},
+    };
+
+    function reducer(state, action) {
+      switch (action.type) {
+        case 'SET':
+          return { ...state, [action.key]: action.value };
+        default:
+          return state;
+      }
+    }
+
     function App() {
-      const [status, setStatus] = useState('Ready.');
-      const [profile, setProfile] = useState(null);
-      const [messages, setMessages] = useState([]);
-      const [authForm, setAuthForm] = useState({ username: '', password: '' });
-      const [registerForm, setRegisterForm] = useState({
-        username: '',
-        password: '',
-        location: '',
-        university: '',
-      });
-      const [messageForm, setMessageForm] = useState({ to: '', body: '' });
-      const [authMode, setAuthMode] = useState('login');
+      const [state, dispatch] = useReducer(reducer, initialState);
+      const {
+        status,
+        profile,
+        messages,
+        authForm,
+        registerForm,
+        messageForm,
+        authMode,
+        suggestions,
+        invites,
+        conversations,
+        activeChat,
+        lastSeen,
+      } = state;
+      const lastSeenRef = useRef({});
+      const messageInputRef = useRef(null);
+      const chatStreamRef = useRef(null);
+
+      const scrollToBottom = () => {
+        if (chatStreamRef.current) {
+          chatStreamRef.current.scrollTop = chatStreamRef.current.scrollHeight;
+        }
+      };
+
+      const setField = (key, value) => dispatch({ type: 'SET', key, value });
+
+      useEffect(() => {
+        const stored = localStorage.getItem('lastSeen');
+        if (stored) {
+          try {
+            const parsed = JSON.parse(stored);
+            setField('lastSeen', parsed);
+            lastSeenRef.current = parsed;
+          } catch (_) {}
+        }
+      }, []);
 
       const loadProfile = async () => {
         const res = await fetch('/api/profile', { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
-          setProfile(data);
+          setField('profile', data);
         } else {
-          setProfile(null);
+          setField('profile', null);
+          setField('messages', []);
+          setField('invites', []);
+          setField('conversations', []);
+          setField('lastSeen', {});
+          lastSeenRef.current = {};
         }
       };
 
       const loadMessages = async () => {
         const res = await fetch('/api/messages', { credentials: 'include' });
         if (!res.ok) {
-          setMessages([]);
+          setField('messages', []);
+          if (res.status === 401) setField('profile', null);
           return;
         }
         const data = await res.json();
-        setMessages(data);
+        const list = Array.isArray(data) ? data : [];
+        setField('messages', list);
+        computeConversations(list, lastSeenRef.current);
+        if (activeChat) {
+          markSeen(activeChat, list);
+        }
+      };
+
+      useEffect(() => {
+        const id = setInterval(() => {
+          if (profile) {
+            loadMessages();
+            loadInvitations();
+          }
+        }, 1000);
+        return () => clearInterval(id);
+      }, [profile]);
+
+      const loadInvitations = async () => {
+        const res = await fetch('/api/invitations', { credentials: 'include' });
+        if (!res.ok) {
+          setField('invites', []);
+          if (res.status === 401) setField('profile', null);
+          return;
+        }
+        const data = await res.json();
+        setField('invites', Array.isArray(data) ? data : []);
       };
 
       useEffect(() => {
         loadProfile();
         loadMessages();
+        loadInvitations();
       }, []);
+
+      useEffect(() => {
+        if (activeChat) {
+          markSeen(activeChat, messages);
+        }
+      }, [activeChat]);
+
+      useEffect(() => {
+        if (messageInputRef.current) {
+          messageInputRef.current.focus();
+        }
+        scrollToBottom();
+      }, [messages, activeChat]);
 
       const handleRegister = async (e) => {
         e.preventDefault();
@@ -197,8 +366,8 @@
           method: 'POST',
           body: JSON.stringify(registerForm),
         });
-        setStatus(ok ? 'Registered! Now log in.' : error);
-        if (ok) setAuthMode('login');
+        setField('status', ok ? 'Registered! Now log in.' : error);
+        if (ok) setField('authMode', 'login');
       };
 
       const handleLogin = async (e) => {
@@ -208,38 +377,110 @@
           body: JSON.stringify(authForm),
         });
         if (ok) {
-          setStatus('Logged in.');
-          setAuthForm({ username: '', password: '' });
+          setField('status', 'Logged in.');
+          setField('authForm', { username: '', password: '' });
           await loadProfile();
           await loadMessages();
+          await loadInvitations();
+          setField('lastSeen', {});
+          lastSeenRef.current = {};
+          setField('activeChat', '');
         } else {
-          setStatus(error);
+          setField('status', error);
         }
       };
 
       const handleLogout = async () => {
         const { ok, error } = await fetchJSON('/api/logout', { method: 'POST' });
-        setStatus(ok ? 'Logged out.' : error);
-        setProfile(null);
-        setMessages([]);
+        setField('status', ok ? 'Logged out.' : error);
+        setField('profile', null);
+        setField('messages', []);
+        setField('invites', []);
       };
 
       const handleSend = async (e) => {
         e.preventDefault();
-        if (!messageForm.to || !messageForm.body) {
-          setStatus('Please enter recipient and message.');
+        const target = messageForm.to || activeChat;
+        if (!target || !messageForm.body) {
+          setField('status', 'Please choose a recipient and enter a message.');
           return;
         }
-        const { ok, error } = await fetchJSON('/api/messages', {
+        const { ok, error, message, data } = await fetchJSON('/api/messages', {
           method: 'POST',
-          body: JSON.stringify(messageForm),
+          body: JSON.stringify({ to: target, body: messageForm.body }),
         });
         if (ok) {
-          setStatus(`Sent to ${messageForm.to}.`);
-          setMessageForm({ to: '', body: '' });
+          setField('status', message || data?.message || `Sent to ${target}.`);
+          setField('messageForm', { to: '', body: '' });
+          setField('activeChat', target);
+          markSeen(target, messages);
+          loadMessages();
+          loadInvitations();
+        } else {
+          setField('status', error);
+        }
+      };
+
+      const acceptInvite = async (id) => {
+        const { ok, error } = await fetchJSON('/api/invitations', {
+          method: 'POST',
+          body: JSON.stringify({ id }),
+        });
+        if (ok) {
+          setField('status', 'Invitation accepted. You can now message each other.');
+          loadInvitations();
           loadMessages();
         } else {
-          setStatus(error);
+          setField('status', error);
+        }
+      };
+
+      const computeConversations = (list, seenOverride) => {
+        if (!profile) return;
+        const seenMap = seenOverride || lastSeenRef.current;
+        const map = new Map();
+        list.forEach((m) => {
+          const other = m.from === profile.username ? m.to : m.from;
+          const existing = map.get(other) || { user: other, last: null, unread: 0 };
+          if (!existing.last || new Date(m.sentAt) > new Date(existing.last.sentAt)) {
+            existing.last = m;
+          }
+          const seen = seenMap[other] ? new Date(seenMap[other]) : null;
+          if (m.to === profile.username && (!seen || new Date(m.sentAt) > seen)) {
+            existing.unread += 1;
+          }
+          map.set(other, existing);
+        });
+        const arr = Array.from(map.values()).sort((a, b) => new Date(b.last.sentAt) - new Date(a.last.sentAt));
+        setField('conversations', arr);
+      };
+
+      const markSeen = (user, list) => {
+        if (!user) return;
+        const now = new Date().toISOString();
+        const updated = { ...lastSeenRef.current, [user]: now };
+        setField('lastSeen', updated);
+        lastSeenRef.current = updated;
+        localStorage.setItem('lastSeen', JSON.stringify(updated));
+        computeConversations(list || messages, updated);
+      };
+
+      const selectChat = (user) => {
+        setField('suggestions', []);
+        setField('activeChat', user);
+        markSeen(user, messages);
+        scrollToBottom();
+      };
+
+      const searchUsers = async (query) => {
+        if (!query) {
+          setField('suggestions', []);
+          return;
+        }
+        const res = await fetch(`/api/users?search=${encodeURIComponent(query)}`, { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setField('suggestions', data);
         }
       };
 
@@ -261,7 +502,7 @@
                   key: mode,
                   className: `tab ${authMode === mode ? 'active' : ''}`,
                   type: 'button',
-                  onClick: () => setAuthMode(mode),
+                  onClick: () => setField('authMode', mode),
                 }, mode === 'login' ? 'Log In' : 'Register')
               ),
             ),
@@ -271,7 +512,7 @@
                 React.createElement('input', {
                   id: 'login-username',
                   value: authForm.username,
-                  onChange: (e) => setAuthForm({ ...authForm, username: e.target.value }),
+                  onChange: (e) => setField('authForm', { ...authForm, username: e.target.value }),
                   placeholder: 'piper',
                 }),
                 React.createElement('label', { htmlFor: 'login-password' }, 'Password'),
@@ -279,7 +520,7 @@
                   id: 'login-password',
                   type: 'password',
                   value: authForm.password,
-                  onChange: (e) => setAuthForm({ ...authForm, password: e.target.value }),
+                  onChange: (e) => setField('authForm', { ...authForm, password: e.target.value }),
                   placeholder: '••••••••',
                 }),
                 React.createElement('div', { className: 'stack' },
@@ -292,7 +533,7 @@
                 React.createElement('input', {
                   id: 'reg-username',
                   value: registerForm.username,
-                  onChange: (e) => setRegisterForm({ ...registerForm, username: e.target.value }),
+                  onChange: (e) => setField('registerForm', { ...registerForm, username: e.target.value }),
                   placeholder: 'piper',
                 }),
                 React.createElement('label', { htmlFor: 'reg-password' }, 'Password'),
@@ -300,23 +541,33 @@
                   id: 'reg-password',
                   type: 'password',
                   value: registerForm.password,
-                  onChange: (e) => setRegisterForm({ ...registerForm, password: e.target.value }),
+                  onChange: (e) => setField('registerForm', { ...registerForm, password: e.target.value }),
                   placeholder: '••••••••',
                 }),
                 React.createElement('label', { htmlFor: 'reg-location' }, 'Location'),
                 React.createElement('input', {
                   id: 'reg-location',
                   value: registerForm.location,
-                  onChange: (e) => setRegisterForm({ ...registerForm, location: e.target.value }),
+                  onChange: (e) => setField('registerForm', { ...registerForm, location: e.target.value }),
                   placeholder: 'Berlin',
                 }),
                 React.createElement('label', { htmlFor: 'reg-university' }, 'University'),
                 React.createElement('input', {
                   id: 'reg-university',
                   value: registerForm.university,
-                  onChange: (e) => setRegisterForm({ ...registerForm, university: e.target.value }),
+                  onChange: (e) => setField('registerForm', { ...registerForm, university: e.target.value }),
                   placeholder: 'State University',
                 }),
+                React.createElement('label', { htmlFor: 'reg-public' }, 'Account visibility'),
+                React.createElement('div', { className: 'stack', style: { marginBottom: '10px' } },
+                  React.createElement('input', {
+                    id: 'reg-public',
+                    type: 'checkbox',
+                    checked: registerForm.public,
+                    onChange: (e) => setField('registerForm', { ...registerForm, public: e.target.checked }),
+                  }),
+                  React.createElement('span', null, registerForm.public ? 'Public (open messages)' : 'Private (requires invite)'),
+                ),
                 React.createElement('div', { className: 'stack' },
                   React.createElement('button', { type: 'submit', className: 'secondary' }, 'Create account'),
                 ),
@@ -327,8 +578,8 @@
       );
 
       const renderDashboard = () => (
-        React.createElement('div', { className: 'grid' },
-          React.createElement('div', { className: 'card' },
+        React.createElement('div', { className: 'layout' },
+          React.createElement('div', { className: 'card', style: { display: 'flex', flexDirection: 'column', gap: '12px' } },
             React.createElement('h3', null, 'Profile'),
             profile ? (
               React.createElement(React.Fragment, null,
@@ -336,52 +587,120 @@
                   React.createElement('span', { className: 'pill' }, '@', profile.username),
                   React.createElement('span', { className: 'pill' }, profile.location || 'Unknown location'),
                   React.createElement('span', { className: 'pill' }, profile.university || 'No university'),
+                  React.createElement('span', { className: 'pill' }, profile.public ? 'Public' : 'Private'),
                 ),
                 React.createElement('div', { className: 'time' }, 'Joined ', new Date(profile.createdAt).toLocaleString()),
               )
             ) : React.createElement('div', null, 'Not signed in.'),
+            React.createElement('div', null,
+              React.createElement('div', { className: 'stack', style: { marginBottom: '8px', justifyContent: 'space-between' } },
+                React.createElement('strong', null, 'Chats'),
+                React.createElement('div', { className: 'stack' },
+                  React.createElement('button', { onClick: () => { loadMessages(); loadInvitations(); }, className: 'ghost' }, 'Refresh'),
+                )
+              ),
+              React.createElement('div', { className: 'conversations' },
+                (conversations || []).length === 0
+                  ? React.createElement('div', { className: 'time' }, 'No conversations yet.')
+                  : (conversations || []).map((c) =>
+                      React.createElement('div', {
+                        key: c.user,
+                        className: `conversation ${activeChat === c.user ? 'active' : ''}`,
+                        onClick: () => selectChat(c.user),
+                      },
+                        React.createElement('div', null,
+                          React.createElement('div', null, c.user),
+                          c.last && React.createElement('div', { className: 'time' }, c.last.body.slice(0, 40)),
+                        ),
+                        React.createElement('div', { className: 'stack' },
+                          c.unread > 0 && React.createElement('span', { className: 'badge' }, c.unread),
+                          c.last && React.createElement('span', { className: 'time' }, new Date(c.last.sentAt).toLocaleTimeString()),
+                        )
+                      )
+                    )
+              ),
+              React.createElement('div', { className: 'stack', style: { marginTop: '10px', flexWrap: 'wrap' } },
+                React.createElement('input', {
+                  id: 'new-chat',
+                  value: messageForm.to,
+                  onChange: (e) => {
+                    const value = e.target.value;
+                    setField('activeChat', '');
+                    setField('messageForm', { ...messageForm, to: value });
+                    searchUsers(value);
+                  },
+                  placeholder: 'Start a new chat (search username)',
+                  style: { flex: 1, minWidth: '200px' },
+                }),
+                (suggestions || []).length > 0 && React.createElement('div', { className: 'stack', style: { flexWrap: 'wrap' } },
+                  (suggestions || []).map((u) =>
+                    React.createElement('button', {
+                      key: u.username,
+                      type: 'button',
+                      className: 'ghost',
+                      onClick: () => {
+                        setField('activeChat', u.username);
+                        setField('messageForm', { to: u.username, body: '' });
+                        setField('suggestions', []);
+                      },
+                    }, `${u.username} ${u.public ? '(public)' : '(private)'}`)
+                  )
+                )
+              ),
+              React.createElement('div', { className: 'stack', style: { marginTop: '12px', marginBottom: '8px' } },
+                React.createElement('strong', null, 'Invitations'),
+                React.createElement('button', { onClick: loadInvitations, className: 'ghost' }, 'Refresh'),
+              ),
+              (invites || []).length === 0
+                ? React.createElement('div', null, 'No pending invitations.')
+                : React.createElement('div', { style: { display: 'grid', gap: '8px' } },
+                    (invites || []).map((inv) =>
+                      React.createElement('div', { key: inv.id, className: 'invite-card' },
+                        React.createElement('div', null,
+                          React.createElement('strong', null, inv.sender),
+                          ' wants to connect.',
+                        ),
+                        React.createElement('div', null, inv.body),
+                        React.createElement('div', { className: 'time' }, new Date(inv.createdAt).toLocaleString()),
+                        React.createElement('button', { onClick: () => acceptInvite(inv.id), className: 'secondary' }, 'Accept'),
+                      )
+                    )
+                  )
+            ),
           ),
-          React.createElement('div', { className: 'card' },
-            React.createElement('h3', null, 'Send Message'),
-            React.createElement('form', { onSubmit: handleSend },
-              React.createElement('label', { htmlFor: 'msg-to' }, 'To'),
+            React.createElement('div', { className: 'chat-window' },
+              React.createElement('div', { className: 'stack', style: { justifyContent: 'space-between' } },
+                React.createElement('div', { className: 'stack' },
+                  React.createElement('h3', { style: { margin: 0 } }, activeChat ? `Chat with ${activeChat}` : 'Select or start a chat'),
+                ),
+                React.createElement('div', null),
+              ),
+            React.createElement('div', { className: 'chat-stream', ref: chatStreamRef },
+              (messages || []).length === 0
+                ? React.createElement('div', null, 'No messages yet.')
+                : (messages || [])
+                    .filter((m) => !activeChat || m.from === activeChat || m.to === activeChat || (profile && m.from === profile.username && m.to === activeChat))
+                    .sort((a, b) => new Date(a.sentAt) - new Date(b.sentAt))
+                    .map((m, idx) => {
+                      const mine = profile && m.from === profile.username;
+                      return React.createElement('div', { key: idx, className: `bubble ${mine ? 'me' : ''}` },
+                        React.createElement('div', null, m.body),
+                        React.createElement('div', { className: 'meta' }, new Date(m.sentAt).toLocaleString())
+                      );
+                    })
+            ),
+            React.createElement('form', { onSubmit: handleSend, className: 'composer' },
               React.createElement('input', {
-                id: 'msg-to',
-                value: messageForm.to,
-                onChange: (e) => setMessageForm({ ...messageForm, to: e.target.value }),
-                placeholder: 'recipient',
-              }),
-              React.createElement('label', { htmlFor: 'msg-body' }, 'Message'),
-              React.createElement('textarea', {
                 id: 'msg-body',
-                rows: 3,
                 value: messageForm.body,
-                onChange: (e) => setMessageForm({ ...messageForm, body: e.target.value }),
-                placeholder: 'Hello there',
+                onChange: (e) => setField('messageForm', { ...messageForm, body: e.target.value }),
+                placeholder: activeChat ? `Message ${activeChat}` : 'Type a message or invitation...',
+                style: { flex: 1 },
+                autoFocus: true,
+                ref: messageInputRef,
               }),
               React.createElement('button', { type: 'submit' }, 'Send'),
             ),
-          ),
-          React.createElement('div', { className: 'card', style: { gridColumn: '1 / -1' } },
-            React.createElement('div', { className: 'stack' },
-              React.createElement('h3', { style: { margin: 0 } }, 'Inbox & Outbox'),
-              React.createElement('button', { onClick: loadMessages, className: 'ghost' }, 'Refresh'),
-            ),
-            messages.length === 0
-              ? React.createElement('div', null, 'No messages yet.')
-              : React.createElement('ul', null,
-                  messages.map((m, idx) =>
-                    React.createElement('li', { key: idx },
-                      React.createElement('div', null,
-                        React.createElement('strong', null, m.from),
-                        ' → ',
-                        React.createElement('strong', null, m.to),
-                      ),
-                      React.createElement('div', null, m.body),
-                      React.createElement('div', { className: 'time' }, new Date(m.sentAt).toLocaleString()),
-                    )
-                  )
-                ),
           ),
         )
       );
@@ -389,10 +708,7 @@
       return (
         React.createElement('div', { className: 'main' },
           React.createElement('div', { className: 'topbar' },
-            React.createElement('div', null,
-              React.createElement('h1', null, 'Go Messaging'),
-              React.createElement('div', { className: 'tagline' }, profile ? 'Dashboard' : 'Welcome'),
-            ),
+            React.createElement('h1', null, 'Go Messaging'),
             React.createElement('div', { className: 'stack' },
               profile && React.createElement('span', { className: 'pill' }, '@', profile.username),
               profile && React.createElement('button', { className: 'danger', onClick: handleLogout }, 'Logout'),
