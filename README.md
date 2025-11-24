@@ -12,6 +12,7 @@ GOCACHE=$PWD/.gocache go run .
 3) Open http://localhost:8080 to use the single-page React widget (bundled via CDN, no build step).
 
 Tables are auto-created on startup (`users`, `sessions`, `messages`).
+Message writes use a goroutine-per-request channel pattern to showcase Go's concurrency while keeping the API surface unchanged. Database connection pool sizing is left at Go defaults (no hard cap).
 
 ## API quick reference
 - `POST /api/register` — `{username,password,location,university}` → 201

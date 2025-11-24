@@ -44,6 +44,11 @@ type authContext struct {
 	username string
 }
 
+type messageResult struct {
+	sentAt time.Time
+	err    error
+}
+
 func main() {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
@@ -55,9 +60,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("unable to open database: %v", err)
 	}
-	db.SetMaxOpenConns(10)
-	db.SetMaxIdleConns(5)
-	db.SetConnMaxLifetime(time.Hour)
 
 	if err := db.Ping(); err != nil {
 		log.Fatalf("unable to reach database: %v", err)
@@ -322,13 +324,19 @@ func handleMessages(w http.ResponseWriter, r *http.Request, ctx authContext) {
 			return
 		}
 
-		var sentAt time.Time
-		err := db.QueryRow(
-			`INSERT INTO messages (sender, recipient, body) VALUES ($1, $2, $3) RETURNING sent_at`,
-			ctx.username, payload.To, payload.Body,
-		).Scan(&sentAt)
-		if err != nil {
-			log.Printf("message insert error: %v", err)
+		resultCh := make(chan messageResult, 1)
+		go func() {
+			var sentAt time.Time
+			err := db.QueryRow(
+				`INSERT INTO messages (sender, recipient, body) VALUES ($1, $2, $3) RETURNING sent_at`,
+				ctx.username, payload.To, payload.Body,
+			).Scan(&sentAt)
+			resultCh <- messageResult{sentAt: sentAt, err: err}
+			close(resultCh)
+		}()
+		res := <-resultCh
+		if res.err != nil {
+			log.Printf("message insert error: %v", res.err)
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
@@ -337,7 +345,7 @@ func handleMessages(w http.ResponseWriter, r *http.Request, ctx authContext) {
 			From:   ctx.username,
 			To:     payload.To,
 			Body:   payload.Body,
-			SentAt: sentAt,
+			SentAt: res.sentAt,
 		})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
