@@ -91,6 +91,17 @@
     li { border-bottom: 1px solid var(--border); padding: 10px 0; }
     .time { font-size: 12px; color: var(--muted); }
     .status { margin: 12px 0; font-size: 14px; color: var(--muted); }
+    .toast {
+      background: #0ea5e9;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 10px;
+      box-shadow: 0 10px 30px rgba(14,165,233,0.25);
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 40px;
+    }
     .auth-layout { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; align-items: start; }
     .hero {
       background: linear-gradient(135deg, rgba(14,165,233,0.12), rgba(16,185,129,0.12));
@@ -258,7 +269,6 @@
     function App() {
       const [state, dispatch] = useReducer(reducer, initialState);
       const {
-        status,
         profile,
         messages,
         authForm,
@@ -271,6 +281,7 @@
         activeChat,
         lastSeen,
       } = state;
+      const [toast, setToast] = React.useState('Ready.');
       const lastSeenRef = useRef({});
       const messageInputRef = useRef(null);
       const chatStreamRef = useRef(null);
@@ -328,6 +339,10 @@
         computeConversations(list, lastSeenRef.current);
         if (activeChat) {
           markSeen(activeChat, list);
+        }
+        const last = list[0];
+        if (last && last.to === profile?.username) {
+          setToast(`${last.from} sent you a message`);
         }
       };
 
@@ -392,7 +407,7 @@
           method: 'POST',
           body: JSON.stringify(registerForm),
         });
-        setField('status', ok ? 'Registered! Now log in.' : error);
+        setToast(ok ? 'Registered! Now log in.' : error);
         if (ok) setField('authMode', 'login');
       };
 
@@ -403,7 +418,7 @@
           body: JSON.stringify(authForm),
         });
         if (ok) {
-          setField('status', 'Logged in.');
+          setToast('Logged in.');
           setField('authForm', { username: '', password: '' });
           await loadProfile();
           await loadMessages();
@@ -412,13 +427,13 @@
           lastSeenRef.current = {};
           setField('activeChat', '');
         } else {
-          setField('status', error);
+          setToast(error);
         }
       };
 
       const handleLogout = async () => {
         const { ok, error } = await fetchJSON('/api/logout', { method: 'POST' });
-        setField('status', ok ? 'Logged out.' : error);
+        setToast(ok ? 'Logged out.' : error);
         setField('profile', null);
         setField('messages', []);
         setField('invites', []);
@@ -428,7 +443,7 @@
         e.preventDefault();
         const target = messageForm.to || activeChat;
         if (!target || !messageForm.body) {
-          setField('status', 'Please choose a recipient and enter a message.');
+          setToast('Please choose a recipient and enter a message.');
           return;
         }
         const { ok, error, message, data } = await fetchJSON('/api/messages', {
@@ -436,13 +451,13 @@
           body: JSON.stringify({ to: target, body: messageForm.body }),
         });
         if (ok) {
-          setField('status', message || data?.message || `Sent to ${target}.`);
+          setToast(message || data?.message || `Sent to ${target}.`);
           setField('messageForm', { to: '', body: '' });
           setField('activeChat', target);
           markSeen(target, messages);
           loadMessages();
         } else {
-          setField('status', error);
+          setToast(error);
         }
       };
 
@@ -452,7 +467,7 @@
           body: JSON.stringify({ id }),
         });
         if (ok) {
-          setField('status', 'Invitation accepted. You can now message each other.');
+          setToast('Invitation accepted. You can now message each other.');
           setField('invites', (invites || []).filter((inv) => inv.id !== id));
           const chatUser = data?.sender;
           if (chatUser) {
@@ -461,7 +476,7 @@
           loadMessages();
           loadInvitations();
         } else {
-          setField('status', error);
+          setToast(error);
         }
       };
 
@@ -503,10 +518,12 @@
       };
 
       useEffect(() => {
-        const firstUser = (conversations && conversations[0] && conversations[0].user) || '';
+        const first = (conversations && conversations[0]) || null;
+        const firstUser = first?.user || '';
         const changed = firstUser && firstUser !== convoFirstRef.current;
         const grew = (conversations || []).length > convoLengthRef.current;
-        if (convoListRef.current && (changed || grew)) {
+        const shouldScrollTop = changed && first && first.unread > 0;
+        if (convoListRef.current && (shouldScrollTop || grew)) {
           convoListRef.current.scrollTop = 0;
         }
         convoFirstRef.current = firstUser;
@@ -653,9 +670,9 @@
                       });
                       if (res.ok) {
                         setField('profile', { ...profile, public: next });
-                        setField('status', `Visibility set to ${next ? 'Public' : 'Private'}`);
+                        setToast(`Visibility set to ${next ? 'Public' : 'Private'}`);
                       } else {
-                        setField('status', 'Failed to update visibility');
+                        setToast('Failed to update visibility');
                       }
                     },
                   }),
@@ -712,7 +729,7 @@
                           c.last && React.createElement('div', { className: 'time' }, c.last.body.slice(0, 40)),
                         ),
                         React.createElement('div', { className: 'stack' },
-                          c.unread > 0 && React.createElement('span', { className: 'badge' }, c.unread),
+                          c.user !== activeChat && c.unread > 0 && React.createElement('span', { className: 'badge' }, c.unread),
                           c.last && React.createElement('span', { className: 'time' }, new Date(c.last.sentAt).toLocaleTimeString()),
                         )
                       )
@@ -784,7 +801,9 @@
                 profile && React.createElement('button', { className: 'danger', onClick: handleLogout }, 'Logout'),
               ),
             ),
-          React.createElement('div', { className: 'status' }, status),
+          React.createElement('div', { className: 'status' },
+            toast ? React.createElement('div', { className: 'toast' }, toast) : null
+          ),
           profile ? renderDashboard() : renderAuth(),
         )
       );
