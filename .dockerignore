@@ -1,0 +1,10 @@
+# Local build artifacts
+.gocache
+.gococache
+messaging-app
+
+# VCS / tooling
+.git
+.gitignore
+Dockerfile
+README.md

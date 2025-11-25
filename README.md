@@ -25,6 +25,43 @@ Tables auto-create on startup (`users`, `sessions`, `messages`, `invitations`, `
 - `GET /api/invitations` — pending invitations for current user
 - `POST /api/invitations` — `{id}` accept an invitation (creates connection and seeds first message)
 
+## Run with Docker
+Build the image locally:
+```bash
+docker build -t messaging-app .
+```
+
+Run the container (requires a Postgres connection string):
+```bash
+docker run --rm -p 8080:8080 \
+  -e DATABASE_URL="postgres://postgres:postgres@host.docker.internal:5432/messaging_app?sslmode=disable" \
+  messaging-app
+```
+
+Quick docker-compose to run app + Postgres:
+```yaml
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: messaging_app
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      retries: 5
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/messaging_app?sslmode=disable
+    ports: ["8080:8080"]
+```
+
 ## Free deploy suggestions
 - **Render free tier**: Web service (Go) + free Postgres. Simple `render.yaml`; sleeps on inactivity.
 - **Railway free tier**: Quick Go deploy + managed Postgres; watch free hours/egress caps.
